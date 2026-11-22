@@ -1,0 +1,110 @@
+import pytest
+
+from api.config import iterate_files
+
+
+def make_repo(root):
+    (root / "README.md").write_text("")
+    (root / "CHANGELOG.md").write_text("")
+    (root / "yarn.lock").write_text("") # excluded
+
+    folder = root / "folder"
+    folder.mkdir(exist_ok=True)
+    (folder / ".lock").write_text("")   # excluded
+    (folder / "code.py").write_text("")
+
+    ex_folder = root / ".venv"
+    ex_folder.mkdir(exist_ok=True)
+    (ex_folder / "file.txt").write_text("")
+    (ex_folder / ".gitignore").write_text("")
+
+
+
+def test_iterate_files_default_exclusive_mode(exclude_test_config, tmp_path):
+    make_repo(tmp_path)
+
+    files = set(iterate_files(root_dir=str(tmp_path)))
+    assert files == {
+        "README.md",
+        "CHANGELOG.md",
+        "folder/code.py",
+    }
+
+@pytest.mark.parametrize(
+    "included_dirs",
+    [
+        ["folder"],
+        ["./folder"],
+    ]
+)
+def test_iterate_files_included_dirs(exclude_test_config, tmp_path, included_dirs):
+    make_repo(tmp_path)
+    files = set(iterate_files(root_dir=str(tmp_path), included_dirs=included_dirs))
+    assert files == {"folder/code.py"}
+
+
+def test_iterate_files_included_files(exclude_test_config, tmp_path):
+    make_repo(tmp_path)
+    files = set(iterate_files(root_dir=str(tmp_path), included_files=["README.md"]))
+    assert files == {"README.md"}
+
+
+@pytest.mark.parametrize(
+    "excluded_dirs",
+    [
+        ["folder"],
+        ["./folder"],
+    ]
+)
+def test_iterate_files_excluded_dirs(exclude_test_config, tmp_path, excluded_dirs):
+    make_repo(tmp_path)
+    files = set(iterate_files(root_dir=str(tmp_path), excluded_dirs=excluded_dirs))
+    assert files == {"README.md", "CHANGELOG.md"}
+
+
+@pytest.mark.parametrize("parent", ["tmp", "build", "docs"])
+def test_iterate_files_ignores_directories_above_root(tmp_path, parent):
+    root = tmp_path / parent / "project"
+    root.mkdir(parents=True)
+    make_repo(root)
+
+    files = set(iterate_files(root_dir=str(root)))
+    assert files == {"README.md", "CHANGELOG.md", "folder/code.py"}
+
+
+def test_iterate_files_included_dirs_ignores_directories_above_root(tmp_path):
+    root = tmp_path / "folder" / "project"
+    root.mkdir(parents=True)
+    make_repo(root)
+    (root / "other").mkdir()
+    (root / "other" / "skip.py").write_text("")
+
+    files = set(iterate_files(root_dir=str(root), included_dirs=["folder"]))
+    assert files == {"folder/code.py"}
+
+
+def test_load_json_config_prefers_file_in_config_dir(monkeypatch, tmp_path):
+    import json
+
+    import api.config as config
+
+    (tmp_path / "generator.json").write_text(
+        json.dumps({"default_provider": "ollama", "providers": {}})
+    )
+    monkeypatch.setattr(config, "CONFIG_DIR", str(tmp_path))
+
+    assert config.load_json_config("generator.json") == {
+        "default_provider": "ollama",
+        "providers": {},
+    }
+
+
+def test_load_json_config_falls_back_to_bundled_file(monkeypatch, tmp_path):
+    import api.config as config
+
+    (tmp_path / "generator.json").write_text("{}")
+    monkeypatch.setattr(config, "CONFIG_DIR", str(tmp_path))
+
+    embedder = config.load_json_config("embedder.json")
+    assert "embedder" in embedder
+    assert embedder["embedder"]["client_class"] == "OpenAIClient"
